@@ -21,6 +21,7 @@ enum _fbv_btn_t {
 	FBV_BTNS
 };
 #define FBV_BTN_LONGPRESS 1000000LL/*us*/
+#define FBV_PEDAL_THRESH 2
 
 #define FBV_INP_BUF_SIZE 4
 #define FBV_OUT_BUF_SIZE FBV_INP_BUF_SIZE
@@ -29,6 +30,7 @@ enum _fbv_btn_t {
 #define POD_INP_BUF_SIZE 4
 #define POD_OUT_BUF_SIZE POD_INP_BUF_SIZE
 #define POD_BUF_SIZE (POD_INP_BUF_SIZE < POD_OUT_BUF_SIZE ? POD_OUT_BUF_SIZE : POD_INP_BUF_SIZE)
+
 
 static unsigned
 	_daemon = 0,
@@ -63,7 +65,7 @@ pthread_cond_t
 	unsigned i; \
 	if (_str) \
 		debug("%s:", _str); \
-	for (i = 0; i < (_msg)->len; i++) \
+	for (i = 0; i < *(_msg)->len; i++) \
 		printf(" 0x%02x", (_msg)->buf[i]); \
 	puts(""); \
 } while (0)
@@ -85,30 +87,34 @@ static inline void tic_get(tic_t *const tic)
 	thread_context_type(_t) { \
 		unsigned *running; \
 		pthread_mutex_t *mutex; \
-		pthread_cond_t *cond; \
+		pthread_cond_t *cond_rst, *cond_ctl; \
 		__VA_ARGS__; }
 
-#define thread_context_initializer(_running, _mutex, _cond, ...) { \
-	.running = _running, .mutex = _mutex, .cond = _cond, \
-	__VA_ARGS__ }
+#define thread_context_initializer(_running, _mutex, _cond_rst, _cond_ctl, ...) { \
+	.running = _running, .mutex = _mutex, .cond_rst = _cond_rst, .cond_ctl = _cond_ctl, __VA_ARGS__ }
 
 typedef struct _midi_message_t {
-	unsigned cnt;
-	const tic_t *tic;
-	const unsigned char *buf;
-	size_t len;
+	tic_t *tic;
+	unsigned char *buf;
+	size_t *len;
+	tic_t *const _tic;
+	unsigned char *const _buf;
+	const size_t _size;
+	size_t *const _len;
 } midi_message_t;
 
-#define midi_message_initializer(_cnt, _tic, _buf, _len) { \
-	.cnt = _cnt, .tic = _tic, .buf = _buf, .len = _len }
+#define midi_message_initializer(__tic, __buf, __size, __len) { \
+	.tic = __tic, .buf = __buf, .len = __len, \
+	._tic = __tic, ._buf = __buf, ._size = __size, ._len = __len }
 
 typedef thread_context_define(message_t,
-	int *fid;
-	midi_message_t *msg) thread_context_message_t;
+	pthread_cond_t *cond_dev;
+	midi_message_t *msg;
+	int *fid) thread_context_message_t;
 
-#define thread_context_message_initializer(_running, _mutex, _cond, _fid, _msg) \
-	thread_context_initializer(_running, _mutex, _cond, \
-		.fid = _fid, .msg = _msg)
+#define thread_context_message_initializer(_running, _mutex, _cond_rst, _cond_ctl, _cond_dev, _msg, _fid) \
+	thread_context_initializer(_running, _mutex, _cond_rst, _cond_ctl, \
+		.cond_dev = _cond_dev, .msg = _msg, .fid = _fid)
 
 enum _ctl_tic_t {
 	TIC_BTN_A,
@@ -120,6 +126,7 @@ enum _ctl_tic_t {
 
 typedef struct _controller_state_t {
 	unsigned char bank, btn;
+	unsigned char vol, expr;
 	tic_t tic[TICS];
 } controller_state_t;
 
@@ -133,15 +140,21 @@ typedef struct _controller_state_t {
 		}, \
 	}
 typedef thread_context_define(control_t,
-	pthread_cond_t *cond_fbv, *cond_pod;
+	pthread_cond_t *cond_fbv_inp, *cond_fbv_out, *cond_pod_inp, *cond_pod_out;
 	midi_message_t *msg_fbv2ctl, *msg_ctl2fbv, *msg_pod2ctl, *msg_ctl2pod;
 	controller_state_t *state) thread_context_control_t;
 
-#define thread_context_control_initializer(_running, _mutex, _cond_ctl, _cond_fbv, _cond_pod, _fbv2ctl, _ctl2fbv, _pod2ctl, _ctl2pod, _state) \
-	thread_context_initializer(_running, _mutex, _cond_ctl, \
-		.cond_fbv = _cond_fbv, .cond_pod = _cond_pod, \
+#define thread_context_control_initializer(_running, _mutex, _cond_rst, _cond_ctl, _cond_fbv_inp, _cond_fbv_out, _cond_pod_inp, _cond_pod_out, _fbv2ctl, _ctl2fbv, _pod2ctl, _ctl2pod, _state) \
+	thread_context_initializer(_running, _mutex, _cond_rst, _cond_ctl, \
+		.cond_fbv_inp = _cond_fbv_inp, .cond_fbv_out = _cond_fbv_out, .cond_pod_inp = _cond_pod_inp, .cond_pod_out = _cond_pod_out, \
 		.msg_fbv2ctl = _fbv2ctl, .msg_ctl2fbv = _ctl2fbv, .msg_pod2ctl = _pod2ctl, .msg_ctl2pod = _ctl2pod, \
 		.state = _state)
+
+#define swap_var(_i1, _i2) do { \
+	(_i1) = (_i1) ^ (_i2); \
+	(_i2) = (_i1) ^ (_i2); \
+	(_i1) = (_i1) ^ (_i2); \
+} while (0)
 
 #define swap_ptr(_p1, _p2) do { \
 	(_p1) = (typeof(_p1))((intptr_t)(_p1) ^ (intptr_t)(_p2)); \
@@ -206,24 +219,42 @@ int main(int argc, char **argv)
 		fbv2ctl_running = 0, ctl2fbv_running = 0,
 		pod2ctl_running = 0, ctl2pod_running = 0;
 	pthread_cond_t
-		cond_fbv = PTHREAD_COND_INITIALIZER,
-		cond_pod = PTHREAD_COND_INITIALIZER;
+		cond_rst = PTHREAD_COND_INITIALIZER,
+		cond_fbv_inp = PTHREAD_COND_INITIALIZER,
+		cond_fbv_out = PTHREAD_COND_INITIALIZER,
+		cond_pod_inp = PTHREAD_COND_INITIALIZER,
+		cond_pod_out = PTHREAD_COND_INITIALIZER;
 
 	controller_state_t
 		state = controller_state_initializer();
+	tic_t
+		tic_fbv2ctl[2] = { 0, 0 },
+		tic_ctl2fbv[2] = { 0, 0 },
+		tic_pod2ctl[2] = { 0, 0 },
+		tic_ctl2pod[2] = { 0, 0 };
+	unsigned char
+		buf_fbv2ctl[2 * FBV_OUT_BUF_SIZE],
+		buf_ctl2fbv[2 * FBV_INP_BUF_SIZE],
+		buf_pod2ctl[2 * POD_OUT_BUF_SIZE],
+		buf_ctl2pod[2 * POD_INP_BUF_SIZE];
+	size_t
+		len_fbv2ctl[2] = { 0, 0 },
+		len_ctl2fbv[2] = { 0, 0 },
+		len_pod2ctl[2] = { 0, 0 },
+		len_ctl2pod[2] = { 0, 0 };
 	midi_message_t
-		msg_fbv2ctl = midi_message_initializer(0, 0, 0, 0),
-		msg_ctl2fbv = midi_message_initializer(0, 0, 0, 0),
-		msg_pod2ctl = midi_message_initializer(0, 0, 0, 0),
-		msg_ctl2pod = midi_message_initializer(0, 0, 0, 0);
+		msg_fbv2ctl = midi_message_initializer(tic_fbv2ctl, buf_fbv2ctl, FBV_OUT_BUF_SIZE, len_fbv2ctl),
+		msg_ctl2fbv = midi_message_initializer(tic_ctl2fbv, buf_ctl2fbv, FBV_INP_BUF_SIZE, len_ctl2fbv),
+		msg_pod2ctl = midi_message_initializer(tic_pod2ctl, buf_pod2ctl, POD_OUT_BUF_SIZE, len_pod2ctl),
+		msg_ctl2pod = midi_message_initializer(tic_ctl2pod, buf_ctl2pod, POD_INP_BUF_SIZE, len_ctl2pod);
 
 	thread_context_control_t
-		ctx_control = thread_context_control_initializer(&ctl_running, &mutex, &cond_ctl, &cond_fbv, &cond_pod, &msg_fbv2ctl, &msg_ctl2fbv, &msg_pod2ctl, &msg_ctl2pod, &state);
+		ctx_control = thread_context_control_initializer(&ctl_running, &mutex, &cond_rst, &cond_ctl, &cond_fbv_inp, &cond_fbv_out, &cond_pod_inp, &cond_pod_out, &msg_fbv2ctl, &msg_ctl2fbv, &msg_pod2ctl, &msg_ctl2pod, &state);
 	thread_context_message_t
-		ctx_fbv2ctl = thread_context_message_initializer(&fbv2ctl_running, &mutex, &cond_ctl, &fid_fbv, &msg_fbv2ctl),
-		ctx_ctl2fbv = thread_context_message_initializer(&ctl2fbv_running, &mutex, &cond_fbv, &fid_fbv, &msg_ctl2fbv),
-		ctx_pod2ctl = thread_context_message_initializer(&pod2ctl_running, &mutex, &cond_ctl, &fid_pod, &msg_pod2ctl),
-		ctx_ctl2pod = thread_context_message_initializer(&ctl2pod_running, &mutex, &cond_pod, &fid_pod, &msg_ctl2pod);
+		ctx_fbv2ctl = thread_context_message_initializer(&fbv2ctl_running, &mutex, &cond_rst, &cond_ctl, &cond_fbv_inp, &msg_fbv2ctl, &fid_fbv),
+		ctx_ctl2fbv = thread_context_message_initializer(&ctl2fbv_running, &mutex, &cond_rst, &cond_ctl, &cond_fbv_out, &msg_ctl2fbv, &fid_fbv),
+		ctx_pod2ctl = thread_context_message_initializer(&pod2ctl_running, &mutex, &cond_rst, &cond_ctl, &cond_pod_inp, &msg_pod2ctl, &fid_pod),
+		ctx_ctl2pod = thread_context_message_initializer(&ctl2pod_running, &mutex, &cond_rst, &cond_ctl, &cond_pod_out, &msg_ctl2pod, &fid_pod);
 	void *const context[THREADS] = {
 		[THREAD_CONTROL] = (void *)&ctx_control,
 		[THREAD_FBV_INP] = (void *)&ctx_fbv2ctl,
@@ -333,7 +364,7 @@ int main(int argc, char **argv)
 			unsigned sleep;
 			do
 			{
-				if (pthread_cond_wait(&cond_ctl, &mutex))
+				if (pthread_cond_wait(&cond_rst, &mutex))
 				{
 					error("Wait failed.\n");
 					goto exit0;
@@ -342,21 +373,25 @@ int main(int argc, char **argv)
 					sleep &= *running[i] != 0;
 			} while (sleep);
 		}
-		if ((!ctl_running || !fbv2ctl_running || !ctl2fbv_running) && (fid_fbv >= 0))
+		if (!ctl_running)
+			fbv2ctl_running = ctl2fbv_running = pod2ctl_running = ctl2pod_running = 0;
+		if ((!fbv2ctl_running || !ctl2fbv_running) && (fid_fbv >= 0))
 		{
 			close(fid_fbv);
 			fid_fbv = -1;
 			fbv2ctl_running = ctl2fbv_running = 0;
 		}
-		if ((!ctl_running || !pod2ctl_running || !ctl2pod_running) && (fid_pod >= 0))
+		if ((!pod2ctl_running || !ctl2pod_running) && (fid_pod >= 0))
 		{
 			close(fid_pod);
 			fid_pod = -1;
 			pod2ctl_running = ctl2pod_running = 0;
 		}
 		pthread_cond_broadcast(&cond_ctl);
-		pthread_cond_broadcast(&cond_fbv);
-		pthread_cond_broadcast(&cond_pod);
+		pthread_cond_broadcast(&cond_fbv_inp);
+		pthread_cond_broadcast(&cond_fbv_out);
+		pthread_cond_broadcast(&cond_pod_inp);
+		pthread_cond_broadcast(&cond_pod_out);
 		pthread_mutex_unlock(&mutex);
 
 		for (i = 0; i < THREADS; i++)
@@ -371,9 +406,12 @@ cont0:
 		usleep(retry++ < 100 ? 100000 : 1000000);
 	}
 
+	pthread_cond_destroy(&cond_rst);
 	pthread_cond_destroy(&cond_ctl);
-	pthread_cond_destroy(&cond_fbv);
-	pthread_cond_destroy(&cond_pod);
+	pthread_cond_destroy(&cond_fbv_inp);
+	pthread_cond_destroy(&cond_fbv_out);
+	pthread_cond_destroy(&cond_pod_inp);
+	pthread_cond_destroy(&cond_pod_out);
 	pthread_mutex_destroy(&mutex);
 
 	if (_daemon)
@@ -495,7 +533,7 @@ extern "C" {
 static ssize_t input_parser_fbv(const unsigned char *const buf, const size_t len);
 static ssize_t input_parser_pod(const unsigned char *const buf, const size_t len);
 
-static void *thread_function_input(void *const context, unsigned char *const buffer, const size_t size, const input_parser_t parser);
+static void *thread_function_input(void *const context, const input_parser_t parser, const char *const func);
 
 #ifdef __cplusplus
 }
@@ -503,44 +541,57 @@ static void *thread_function_input(void *const context, unsigned char *const buf
 
 static void *fbvinp(void *const context)
 {
-	unsigned char buf[2 * FBV_INP_BUF_SIZE];
 	void *ret;
-	debug("FBV input started.\n");
-	ret = thread_function_input(context, buf, sizeof(buf), &input_parser_fbv);
-	debug("FBV input terminated.\n");
+	ret = thread_function_input(context, &input_parser_fbv, __FUNCTION__);
 	return ret;
 }
 
 static void *podinp(void *const context)
 {
-	unsigned char buf[2 * POD_INP_BUF_SIZE];
 	void *ret;
-	debug("POD input started.\n");
-	ret = thread_function_input(context, buf, sizeof(buf), &input_parser_pod);
-	debug("POD input terminated.\n");
+	ret = thread_function_input(context, &input_parser_pod, __FUNCTION__);
 	return ret;
 }
 
-static void *thread_function_input(void *const context, unsigned char *const buffer, const size_t size, const input_parser_t parse)
+static void *thread_function_input(void *const context, const input_parser_t parse, const char *const func)
 {
 	thread_context_message_t *const ctx = (thread_context_message_t *)context;
 	pthread_mutex_t *const mutex = ctx->mutex;
-	pthread_cond_t *const cond = ctx->cond;
+	pthread_cond_t
+		*const cond_rst = ctx->cond_rst,
+		*const cond_inp2ctl = ctx->cond_ctl,
+		*const cond_ctl2inp = ctx->cond_dev;
 	unsigned *const running = ctx->running;
-	unsigned char
-		*buf1 = buffer,
-		*buf2 = buffer + size;
+	midi_message_t *const msg = ctx->msg;
 	tic_t
-		tic[2] = { [0] = 0LL, [1] = 0LL },
-		*tic1 = tic,
-		*tic2 = tic + 1;
+		*tic1 = msg->_tic,
+		*tic2 = msg->_tic + 1;
+	unsigned char
+		*buf1 = msg->_buf,
+		*buf2 = msg->_buf + msg->_size;
+	size_t
+		*len1 = msg->_len,
+		*len2 = msg->_len + 1;
+	debug("%s started.\n", func);
 	pthread_mutex_lock(mutex);
-	while (*running)
+	*(msg->len = len1) = 0;
+	pthread_cond_broadcast(cond_inp2ctl);
+	debug("%s ready.\n", func);
+	for (;;)
 	{
 		const int fid = *ctx->fid;
-		midi_message_t *const msg = ctx->msg;
 		unsigned char *ptr = buf1;
 		ssize_t left = 1;
+		while (*running && *len1)
+		{
+			if (pthread_cond_wait(cond_ctl2inp, mutex))
+			{
+				debug("Wait failed.\n");
+				goto exit1;
+			}
+		}
+		if (!*running)
+			goto exit1;
 		pthread_mutex_unlock(mutex);
 		do
 		{
@@ -550,34 +601,36 @@ static void *thread_function_input(void *const context, unsigned char *const buf
 				debug("Failed to read data.\n");
 				goto exit0;
 			}
-			tic_get(tic1);
+			if (left == 1)
+				tic_get(tic1);
 			ptr += rcvd;
 			if ((left = parse(buf1, ptr - buf1)) < 0)
 			{
 				debug("Received unsupported message.\n");
-				break;
+				left = 1;
 			}
 		} while (left);
 		pthread_mutex_lock(mutex);
-		if (!left)
+		if (!*running)
+			goto exit1;
+		if ((*(msg->len = len1) = (ptr - (msg->buf = buf1))))
 		{
-			if ((msg->len = ptr - (msg->buf = buf1)))
-			{
-				msg->cnt++;
-				msg->tic = tic1;
-				pthread_cond_signal(cond);
-				swap_ptr(buf1, buf2);
-				swap_ptr(tic1, tic2);
-			}
+			msg->tic = tic1;
+//debug_msg(func, msg);
+			pthread_cond_signal(cond_inp2ctl);
+			swap_ptr(tic1, tic2);
+			swap_ptr(buf1, buf2);
+			swap_ptr(len1, len2);
 		}
 	}
-	pthread_mutex_unlock(mutex);
-	return 0;
+	goto exit1;
 exit0:
 	pthread_mutex_lock(mutex);
+exit1:
 	*running = 0;
-	pthread_cond_broadcast(cond);
+	pthread_cond_broadcast(cond_rst);
 	pthread_mutex_unlock(mutex);
+	debug("%s exit.\n", func);
 	return 0;
 }
 
@@ -627,7 +680,7 @@ static ssize_t input_parser_default(const unsigned char *const buf, const size_t
 extern "C" {
 #endif
 
-static void *thread_function_output(void *const context);
+static void *thread_function_output(void *const context, const char *const func);
 
 #ifdef __cplusplus
 }
@@ -636,56 +689,73 @@ static void *thread_function_output(void *const context);
 static void *fbvout(void *const context)
 {
 	void *ret;
-	debug("FBV output started.\n");
-	ret = thread_function_output(context);
-	debug("FBV output terminated.\n");
+	ret = thread_function_output(context, __FUNCTION__);
 	return ret;
 }
 
 static void *podout(void *const context)
 {
 	void *ret;
-	debug("POD output started.\n");
-	ret = thread_function_output(context);
-	debug("POD output terminated.\n");
+	ret = thread_function_output(context, __FUNCTION__);
 	return ret;
 }
 
-static void *thread_function_output(void *const context)
+static void *thread_function_output(void *const context, const char *const func)
 {
 	thread_context_message_t *const ctx = (thread_context_message_t *)context;
 	pthread_mutex_t *const mutex = ctx->mutex;
+	pthread_cond_t
+		*const cond_rst = ctx->cond_rst,
+		*const cond_out2ctl = ctx->cond_ctl,
+		*const cond_ctl2out = ctx->cond_dev;
 	unsigned *const running = ctx->running;
+	midi_message_t *const msg = ctx->msg;
+	debug("%s started.\n", func);
 	pthread_mutex_lock(mutex);
-	while (*running)
+	for (;;)
 	{
-		const int fid = *ctx->fid;
-		pthread_cond_t *const cond = ctx->cond;
-		midi_message_t *const msg = ctx->msg;
-		const unsigned cnt = msg->cnt;
-		do {
-			if (pthread_cond_wait(cond, mutex))
-			{
-				debug("Wait failed.\n");
-				goto exit1;
-			}
-		} while (*running && (cnt == msg->cnt));
+		if (!*running)
+			goto exit1;
 		if (msg->len)
+			break;
+		if (pthread_cond_wait(cond_ctl2out, mutex))
 		{
+			debug("Wait failed.\n");
+			goto exit1;
+		}
+	}
+	debug("%s ready.\n", func);
+	do
+	{
+		if (*msg->len)
+		{
+//debug_msg(func, msg);
 			pthread_mutex_unlock(mutex);
 #if 1
-			if (write(fid, msg->buf, msg->len) < 0)
+			if (write(*ctx->fid, msg->buf, *msg->len) < 0)
 			{
 				debug("Failed to write data.\n");
 				goto exit0;
 			}
 #endif
 			pthread_mutex_lock(mutex);
+			*msg->len = 0;
+			pthread_cond_signal(cond_out2ctl);
 		}
-	}
-exit1:
-	pthread_mutex_unlock(mutex);
+		if (pthread_cond_wait(cond_ctl2out, mutex))
+		{
+			debug("Wait failed.\n");
+			goto exit1;
+		}
+	} while (*running);
+	goto exit1;
 exit0:
+	pthread_mutex_lock(mutex);
+exit1:
+	*running = 0;
+	pthread_cond_broadcast(cond_rst);
+	pthread_mutex_unlock(mutex);
+	debug("%s exit.\n", func);
 	return 0;
 }
 
@@ -693,65 +763,92 @@ static void *control(void *const context)
 {
 	thread_context_control_t *const ctx = (thread_context_control_t *)context;
 	pthread_mutex_t *const mutex = ctx->mutex;
+	pthread_cond_t
+		*const cond_rst = ctx->cond_rst,
+		*const cond_ctl = ctx->cond_ctl,
+		*const cond_fbv_inp = ctx->cond_fbv_inp,
+		*const cond_fbv_out = ctx->cond_fbv_out,
+		*const cond_pod_inp = ctx->cond_pod_inp,
+		*const cond_pod_out = ctx->cond_pod_out;
 	unsigned *const running = ctx->running;
+	midi_message_t
+		*const msg_fbv2ctl = ctx->msg_fbv2ctl,
+		*const msg_pod2ctl = ctx->msg_pod2ctl,
+		*const msg_ctl2fbv = ctx->msg_ctl2fbv,
+		*const msg_ctl2pod = ctx->msg_ctl2pod;
+	size_t
+		*len1_fbv = msg_ctl2fbv->_len,
+		*len2_fbv = msg_ctl2fbv->_len + 1,
+		*len1_pod = msg_ctl2pod->_len,
+		*len2_pod = msg_ctl2pod->_len + 1;
+	debug("%s started.\n", __FUNCTION__);
+	//notify output threads
 	pthread_mutex_lock(mutex);
-	while (*running)
+	*(msg_ctl2fbv->len = len1_fbv) = 0;
+	pthread_cond_broadcast(cond_fbv_out);
+	*(msg_ctl2pod->len = len1_pod) = 0;
+	pthread_cond_broadcast(cond_pod_out);
+	//wait input threads
+	for (;;)
 	{
-		pthread_cond_t
-			*const cond_ctl = ctx->cond,
-			*const cond_fbv = ctx->cond_fbv,
-			*const cond_pod = ctx->cond_pod;
-		const midi_message_t
-			*const msg_fbv2ctl = ctx->msg_fbv2ctl,
-			*const msg_pod2ctl = ctx->msg_pod2ctl;
-		const unsigned
-			cnt_fbv2ctl = msg_fbv2ctl->cnt,
-			cnt_pod2ctl = msg_pod2ctl->cnt;
-		midi_message_t
-			*const msg_ctl2fbv = ctx->msg_ctl2fbv,
-			*const msg_ctl2pod = ctx->msg_ctl2pod;
-		unsigned
-			upd_fbv2ctl = 0, upd_pod2ctl = 0;
-		unsigned char
-			buf_fbv[2 * FBV_OUT_BUF_SIZE],
-			*buf1_fbv = buf_fbv,
-			*buf2_fbv = buf_fbv + FBV_OUT_BUF_SIZE,
-			buf_pod[2 * POD_OUT_BUF_SIZE],
-			*buf1_pod = buf_pod,
-			*buf2_pod = buf_pod + POD_OUT_BUF_SIZE;
-		controller_state_t *const state = ctx->state;
-		do {
-			if (pthread_cond_wait(cond_ctl, mutex))
-			{
-				debug("Wait failed.\n");
-				goto exit1;
-			}
-		} while (*running && !(upd_fbv2ctl = (cnt_fbv2ctl != msg_fbv2ctl->cnt)) && !(upd_pod2ctl = (cnt_pod2ctl != msg_pod2ctl->cnt)));
 		if (!*running)
+			goto exit1;
+		if (msg_fbv2ctl->len && msg_pod2ctl->len)
 			break;
-		if (upd_fbv2ctl && msg_fbv2ctl->len)
+		if (pthread_cond_wait(cond_ctl, mutex))
+		{
+			debug("Wait failed.\n");
+			goto exit1;
+		}
+	}
+	debug("%s ready.\n", __FUNCTION__);
+	do
+	{
+		unsigned char
+			*buf1_fbv = msg_ctl2fbv->_buf,
+			*buf2_fbv = msg_ctl2fbv->_buf + msg_ctl2fbv->_size,
+			*buf1_pod = msg_ctl2pod->_buf,
+			*buf2_pod = msg_ctl2pod->_buf + msg_ctl2pod->_size;
+		controller_state_t *const state = ctx->state;
+		if (*msg_fbv2ctl->len && !*len1_pod)
 		{
 			const midi_message_t *const inp = msg_fbv2ctl;
 			midi_message_t *const out = msg_ctl2pod;
 			unsigned char *ptr = buf1_pod;
-			const unsigned char *buf = ptr;
 debug_msg("FBV > CTL", inp);
 			switch (inp->buf[0])
 			{
 				case 0xb0:
-					if (inp->len == 3)
+					if (*inp->len == 3)
 					{
 						switch (inp->buf[1])
 						{
 							case 0x07: //channel volume
-								memcpy(ptr, inp->buf, inp->len);
-								ptr += inp->len;
+							{
+								const char
+									val = inp->buf[2],
+									diff = val < state->vol ? state->vol - val : val - state->vol;
+								if (diff >= FBV_PEDAL_THRESH)
+								{
+									*ptr++ = inp->buf[0];
+									*ptr++ = inp->buf[1];
+									*ptr++ = (state->vol = val);
+								}
 								break;
+							}
 							case 0x0b: //expression
-								*ptr++ = 0xb0;
-								*ptr++ = 0x04;
-								*ptr++ = inp->buf[2];
+							{
+								const char
+									val = inp->buf[2],
+									diff = val < state->expr ? state->expr - val : val - state->expr;
+								if (diff >= FBV_PEDAL_THRESH)
+								{
+									*ptr++ = 0xb0;
+									*ptr++ = 0x04;
+									*ptr++ = (state->expr = val);
+								}
 								break;
+							}
 							case 0x14: case 0x15: case 0x16: case 0x17: //btn codes
 							{
 								const unsigned btn = inp->buf[1] - 0x14;
@@ -759,7 +856,7 @@ debug_msg("FBV > CTL", inp);
 								{
 									tic_t *const tic = &state->tic[btn + TIC_BTN_A];
 									*tic = *inp->tic;
-debug("Press %i\n", btn);
+//debug("Press %i\n", btn);
 									if (btn != state->btn)
 									{
 										//btn change
@@ -774,6 +871,7 @@ debug("Press %i\n", btn);
 										*ptr++ = 0x7f;
 									}
 								}
+#if 0
 								else //release
 								{
 									if (btn == state->btn)
@@ -782,9 +880,10 @@ debug("Press %i\n", btn);
 											*const tic1 = inp->tic,
 											*const tic0 = &state->tic[btn + TIC_BTN_A],
 											dtic = *tic1 - *tic0;
-debug("Release %i (%lli)\n", btn, dtic);
+//debug("Release %i (%lli)\n", btn, dtic);
 									}
 								}
+#endif
 								break;
 							}
 							case 0x66: //foot switch
@@ -798,25 +897,26 @@ debug("Release %i (%lli)\n", btn, dtic);
 				default:
 					break;
 			}
-			if ((out->len = (ptr - (out->buf = buf))))
+			if ((*(out->len = len1_pod) = (ptr - (out->buf = buf1_pod))))
 			{
-				out->cnt++;
-debug_msg("CTL > POD", out);
-				pthread_cond_signal(cond_pod);
+debug_msg("POD < CTL", out);
+				pthread_cond_signal(cond_pod_out);
 				swap_ptr(buf1_pod, buf2_pod);
+				swap_ptr(len1_pod, len2_pod);
 			}
+			*msg_fbv2ctl->len = 0;
+			pthread_cond_signal(cond_fbv_inp);
 		}
-		if (upd_pod2ctl && msg_pod2ctl->len)
+		if (*msg_pod2ctl->len && !*len1_fbv)
 		{
 			const midi_message_t *const inp = msg_pod2ctl;
 			midi_message_t *const out = msg_ctl2fbv;
 			unsigned char *ptr = buf1_fbv;
-			const unsigned char *buf = ptr;
 debug_msg("POD > CTL", inp);
 			switch (inp->buf[0])
 			{
 				case 0xb0:
-					if (inp->len == 3)
+					if (*inp->len == 3)
 					{
 						switch (inp->buf[1])
 						{
@@ -826,26 +926,35 @@ debug_msg("POD > CTL", inp);
 					}
 					break;
 				case 0xc0:
-					if (inp->len == 2)
+					if (*inp->len == 2)
 					{
 						const unsigned idx = inp->buf[1] - 1;
 						state->bank = idx / FBV_BTNS;
 						state->btn = idx % FBV_BTNS;
 					}
-					break;
 				default:
 					break;
 			}
-			if ((out->len = (ptr - (out->buf = buf))))
+			if ((*(out->len = len1_fbv) = (ptr - (out->buf = buf1_fbv))))
 			{
-				out->cnt++;
-debug_msg("CTL > FBV", out);
-				pthread_cond_signal(cond_fbv);
+debug_msg("FBV < CTL", out);
+				pthread_cond_signal(cond_fbv_out);
 				swap_ptr(buf1_fbv, buf2_fbv);
+				swap_ptr(len1_fbv, len2_fbv);
 			}
+			*msg_pod2ctl->len = 0;
+			pthread_cond_signal(cond_pod_inp);
 		}
-	}
+		if (pthread_cond_wait(cond_ctl, mutex))
+		{
+			debug("Wait failed.\n");
+			goto exit1;
+		}
+	} while (*running);
 exit1:
+	*running = 0;
+	pthread_cond_signal(cond_rst);
 	pthread_mutex_unlock(mutex);
+	debug("%s exit.\n", __FUNCTION__);
 	return 0;
 }
