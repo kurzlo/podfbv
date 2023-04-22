@@ -1,5 +1,5 @@
 # About
-PODFBV is a tool to exchange and transcode MIDI messages between the <a href=https://line6.com/foot-controllers/fbv-express-mkii>*Line 6* FBV Express MKII</a> floor-board and the <a href=https://line6.com/pocket-pod>*Line 6* Pocket POD</a> guitar multi-effect processor. The program is executed on a Linux-based host computer (e.g. *Raspberry PI*) with both *Line 6*-devices connected via USB.
+PODFBV is a tool to exchange and transcode MIDI messages between the <a href=https://line6.com/foot-controllers/fbv-express-mkii>*Line 6* FBV Express MKII</a> floor-board and the <a href=https://line6.com/pocket-pod>*Line 6* Pocket POD</a> guitar multi-effect processor. The program is executed on a Linux-based host computer (e.g. <a href=https://www.raspberrypi.com/products/raspberry-pi-4-model-b>*Raspberry Pi*</a>) with both *Line 6*-devices connected via USB.
 
 Currently, only basic functionality of the floor-board is covered, i.e. bank switching, tapping, volume and wah-wah. Enable or disable the tuner is not supported since LED control is not available on the floor-board.
 The floor-board requires to be programmed according to the scheme <a href=https://github.com/kurzlo/podfbv/blob/master/misc/fbv_settings.fbv>fbv_setting.fbv</a>.
