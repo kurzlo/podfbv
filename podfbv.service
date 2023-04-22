@@ -1,0 +1,11 @@
+[Unit]
+Description=podfbv
+
+[Service]
+Type=oneshot
+ExecStart=/bin/sh -c "[ -z $(pidof podfbv) ] && /home/lothar/repositories/podfbv/podfbv -d"
+ExecStop=/bin/sh -c "PID=$(pidof podfbv); [ -z $PID ] && Service not running || kill $PID"
+RemainAfterExit=yes
+
+[Install]
+WantedBy=multi-user.target
