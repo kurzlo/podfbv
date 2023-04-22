@@ -37,7 +37,7 @@ Run \
 to run as daemon.
 
 A "sytemctl" service script-template is available at <a href=https://github.com/kurzlo/podfbv/blob/master/podfbv.service>podfpv.service</a>.
-First, replace "/home/lothar/repositories/podfbv" by the path to your executable.
+First, replace "<a href=https://github.com/kurzlo/podfbv/blob/4eaf8fc2a98548d06ec8c163a957d0f167dd2b8e/podfbv.service#L6>/home/lothar/repositories/podfbv</a>" by the path to your executable.
 The script can afterwards be installed with the following command: \
 **$ systemctl enable <path_to_script_file>/podfbv.service**
 
