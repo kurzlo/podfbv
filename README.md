@@ -18,10 +18,18 @@ A cross-compile prefix (e.g. for ARM 64 bit engines) can also be provided \
 **$ CROSS_COMPILE=aarch64-linux-gnu- make all** \
 to build the program on a remote machine.
 
+For Windows machines use \
+**$ API=win make all** \
+The cross-compile prefix will be set to x86_64-w64-mingw32- automatically.
+
 ## Command line application
 Run \
 **$ make run** \
-to execute on terminal.
+to execute on a Linux terminal.
+
+Run \
+**$ ARGS=--loop API=win make run** \
+to execute in a Windows command shell.
 
 Per default the program scans the "/dev/snd/by-id/" folder for respective device soft-links (i.e. "usb-Line_6_FBV_Express_Mk_II-00" and "usb-Line_6_Line_6_Pocket_POD-00") and opens respective MIDI interfaces one level above.
 
