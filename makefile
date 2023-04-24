@@ -4,15 +4,23 @@ default: all
 TARGET	?= podfbv
 
 GCC	?= gcc
-CFLAGS	+= -O0 -g -Wall -fPIC -pthread
+CFLAGS	+= -O0 -g -Wall -fPIC 
+
+ifeq ($(API),win)
+CROSS_COMPILE	?= x86_64-w64-mingw32-
+LIBS	+= winmm
+EXT		?= exe
+DEFNS	+= API_WIN
+else
+CFLAGS	+= -pthread
 LFLAGS	+= -pthread
+#LIBS	+= usb
+endif
 
 FILES	+=
 
-LIBS	+= usb
-
 SRCDIR	?= src
-OBJDIR	?= obj
+OBJDIR	?= obj$(CROSS_COMPILE:%-=/%)
 
 OBJFILES	 = $(FILES:%=$(OBJDIR:%=%/)%.o) $(TARGET:%=$(OBJDIR:%=%/)%.o)
 DEPFILES	 = $(OBJFILES:%.o=%.d)
@@ -30,7 +38,7 @@ $(OBJDIR:%=%/)%.d: $(SRCDIR:%=%/)%.c | $(DIRS)
 $(OBJDIR:%=%/)%.o: $(SRCDIR:%=%/)%.c | $(DIRS)
 	$(CROSS_COMPILE)$(GCC) $(INCDIRS:%=-I%) $(DEFNS:%=-D%) $(CFLAGS) -c $< -o $@
 
-$(TARGET): $(OBJFILES)
+$(TARGET:%=%$(EXT:%=.%)): $(OBJFILES)
 	$(CROSS_COMPILE)$(GCC) $(LIBDIRS:%=-L%) $(LFLAGS) $^ $(LIBS:%=-l%) -o $@
 
 dep: $(DEPFILES)
@@ -38,11 +46,11 @@ dep: $(DEPFILES)
 clean:
 	@rm -rf $(OBJFILES) $(DEPFILES)
 
-all: $(TARGET)
+all: $(TARGET:%=%$(EXT:%=.%))
 
 run: all
-	$(TARGET:%=./%) $(ARGS)
+	$(TARGET:%=./%$(EXT:%=.%)) $(ARGS)
 
 debug: all
-	gdb --args $(TARGET:%=./%) $(ARGS)
+	gdb --args $(TARGET:%=./%$(EXT:%=.%)) $(ARGS)
 
