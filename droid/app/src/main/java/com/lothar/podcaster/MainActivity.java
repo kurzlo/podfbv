@@ -13,9 +13,12 @@ import android.widget.Button;
 import android.widget.CompoundButton;
 import android.widget.RadioButton;
 import android.widget.ScrollView;
+import android.widget.SeekBar;
 import android.widget.Switch;
 import android.widget.TextView;
 import android.view.View;
+
+import java.io.IOException;
 
 public class MainActivity extends AppCompatActivity {
 
@@ -45,6 +48,26 @@ public class MainActivity extends AppCompatActivity {
                 public void onCheckedChanged(CompoundButton buttonView, boolean isChecked) {
                     Podcaster podcaster = Podcaster.getInstance();
                     podcaster.enablePOD(isChecked);
+                }
+            });
+            final SeekBar seekBar = (SeekBar) findViewById(R.id.seekBar);
+            seekBar.setOnSeekBarChangeListener(new SeekBar.OnSeekBarChangeListener() {
+                private int lastProgress = 0;
+                @Override
+                public void onProgressChanged(SeekBar seekBar, int i, boolean b) {
+                    if (b)
+                        this.lastProgress = i;
+                }
+                @Override
+                public void onStartTrackingTouch(SeekBar seekBar) {}
+                @Override
+                public void onStopTrackingTouch(SeekBar seekBar) {
+                    Podcaster podcaster = Podcaster.getInstance();
+                    try {
+                        podcaster.setVolumeThresh(.01f * (float)(this.lastProgress));
+                    } catch (IOException e) {
+                        e.printStackTrace();
+                    }
                 }
             });
         }

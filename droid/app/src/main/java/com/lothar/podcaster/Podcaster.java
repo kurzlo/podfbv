@@ -36,11 +36,12 @@ class FBVReceiver extends MidiReceiver {
                         byte param2 = data[i++];
                         switch (param1)
                         {
-                            case 0x07: //vol
-                                buf[len++] = type;
-                                buf[len++] = param1;
-                                buf[len++] = param2;
+                            case 0x07: { //vol
+                                podcaster.volume = param2;
+                                podcaster.sendVolume();
+                                processed = true;
                                 break;
+                            }
                             case 0x0b: //expr
                                 buf[len++] = type;
                                 buf[len++] = 0x04;
@@ -65,7 +66,7 @@ class FBVReceiver extends MidiReceiver {
                                             podcaster.lock.lock();
                                             podcaster.channel = (byte) ((byte) (podcaster.channel / Podcaster.fbvButtons) * Podcaster.fbvButtons + param1);
                                             buf[len++] = (byte) (0xc0);
-                                            buf[len++] = (byte) ((podcaster.channel % Podcaster.fbvButtons) + 1);
+                                            buf[len++] = (byte) (podcaster.channel + 1);
                                             channel = (byte)(podcaster.channel + 1);
                                             podcaster.lock.unlock();
                                         }
@@ -183,6 +184,8 @@ public class Podcaster {
     public MidiOutputPort outPOD = null;
 
     public byte channel = 0;
+    public byte volume = 0;
+    public float volumeThresh = 0;
 
     @RequiresApi(api = Build.VERSION_CODES.M)
     final public void init(MidiManager mm, PodcasterCallback callback) {
@@ -203,6 +206,38 @@ public class Podcaster {
                 podcaster.removeDeviceHandler(info);
             }
         }, null);
+    }
+
+    @RequiresApi(api = Build.VERSION_CODES.M)
+    final public void setVolumeThresh(float value) throws IOException {
+        Podcaster podcaster = Podcaster.getInstance();
+        if (value < .0f)
+            this.volumeThresh = .0f;
+        else if (value > 1.f)
+            this.volumeThresh = 1.f;
+        else
+            this.volumeThresh = value;
+        podcaster.sendVolume();
+    }
+
+    @RequiresApi(api = Build.VERSION_CODES.M)
+    final public void sendVolume() throws IOException {
+        Podcaster podcaster = Podcaster.getInstance();
+        byte[] buf = new byte[4];
+        int len = 0;
+        podcaster.lock.lock();
+        if (podcaster.inpPOD != null) {
+            float vol = podcaster.volumeThresh + (1.f - podcaster.volumeThresh) * (float) (podcaster.volume) / 127.f;
+            buf[len++] = (byte)(0xb0);
+            buf[len++] = 0x07;
+            buf[len++] = (byte)(vol * 127.f);
+            podcaster.inpPOD.send(buf, 0, len);
+        }
+        podcaster.lock.unlock();
+        if ((len != 0) && (podcaster.callback != null)) {
+            String dstr = Podcaster.toHex(buf, 0, len);
+            podcaster.callback.send(PodcasterMessageType.POD_TX, dstr, 0);
+        }
     }
 
     @RequiresApi(api = Build.VERSION_CODES.M)
@@ -342,8 +377,14 @@ public class Podcaster {
             final int podStat = podIsEnabled ? 0 : -1;
             if (podIsEnabled != podcaster.PODenabled)
                 podcaster.callback.send(PodcasterMessageType.POD_DEV, "Failed to connect to POD", podStat);
-            else if (podIsEnabled && !podWasEnabled)
+            else if (podIsEnabled && !podWasEnabled) {
                 podcaster.callback.send(PodcasterMessageType.POD_DEV, "POD connected", podStat);
+                try {
+                    podcaster.sendVolume();
+                } catch (IOException e) {
+                    e.printStackTrace();
+                }
+            }
         }
     }
 

@@ -37,7 +37,6 @@
             android:layout_width="match_parent"
             android:layout_height="match_parent">
 
-                <!--android:layoutDirection="rtl"-->
             <RadioButton
                 android:id="@+id/radioButtonFBV"
                 android:textSize="18sp"
@@ -50,6 +49,16 @@
 
         <TableRow
             android:layout_width="match_parent"
+            android:layout_height="match_parent" >
+
+            <Space
+                android:layout_width="wrap_content"
+                android:layout_height="16dp"
+                android:layout_weight="1" />
+        </TableRow>
+
+        <TableRow
+            android:layout_width="match_parent"
             android:layout_height="match_parent">
 
             <Switch
@@ -58,7 +67,6 @@
                 android:layout_width="match_parent"
                 android:layout_height="match_parent"
                 android:layout_weight="1"
-                android:paddingTop="16dp"
                 android:paddingBottom="8dp"
                 android:text="Line 6 Pocket POD" />
 
@@ -76,6 +84,36 @@
                 android:layout_weight="0"
                 android:clickable="false"
                 android:text="Connection status" />
+        </TableRow>
+
+        <TableRow
+            android:layout_width="match_parent"
+            android:layout_height="match_parent" >
+
+            <Space
+                android:layout_width="wrap_content"
+                android:layout_height="16dp"
+                android:layout_weight="1" />
+        </TableRow>
+
+        <TableRow
+            android:layout_width="match_parent"
+            android:layout_height="match_parent" >
+
+            <TextView
+                android:id="@+id/textViewVolumeLabel"
+                android:textColor="#000000"
+                android:textSize="18sp"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:text="Volume Threshold" />
+
+            <SeekBar
+                android:id="@+id/seekBar"
+                android:layout_width="wrap_content"
+                android:layout_height="match_parent"
+                android:layout_weight="1" />
+
         </TableRow>
 
         <TableRow
